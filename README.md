@@ -65,3 +65,4 @@ Then open `http://localhost:1234` in a Chrome browser. The `npm run build` step 
 ## License
 
 The code in this repository is Copyright (c) 2023 Espressif Systems (Shanghai) Co. Ltd. It is licensed under Apache 2.0 license, as described in [LICENSE](LICENSE) file.
+
