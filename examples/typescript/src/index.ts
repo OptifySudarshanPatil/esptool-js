@@ -11,6 +11,7 @@ const consoleStopButton = document.getElementById("consoleStopButton") as HTMLBu
 const eraseButton = document.getElementById("eraseButton") as HTMLButtonElement;
 const addFileButton = document.getElementById("addFile") as HTMLButtonElement;
 const programButton = document.getElementById("programButton");
+const loadFlasherArgsButton = document.getElementById("loadFlasherArgs") as HTMLButtonElement;
 const filesDiv = document.getElementById("files");
 const terminal = document.getElementById("terminal");
 const programDiv = document.getElementById("program");
@@ -400,41 +401,138 @@ function validateProgramInputs() {
 
 programButton.onclick = async () => {
   const alertMsg = document.getElementById("alertmsg");
-  const err = validateProgramInputs();
+  
+  // Check if files are loaded from flasher_args.json (no file input)
+  const isFlasherArgsMode = table.rows.length > 1 && !table.rows[1].cells[1].querySelector('input[type="file"]');
+  
+  if (isFlasherArgsMode) {
+    // Load files from build directory based on flasher_args.json
+    await programFromFlasherArgs(alertMsg);
+  } else {
+    // Original file upload mode
+    const err = validateProgramInputs();
 
-  if (err != "success") {
-    alertMsg.innerHTML = "<strong>" + err + "</strong>";
-    alertDiv.style.display = "block";
-    return;
+    if (err != "success") {
+      alertMsg.innerHTML = "<strong>" + err + "</strong>";
+      alertDiv.style.display = "block";
+      return;
+    }
+
+    // Hide error message
+    alertDiv.style.display = "none";
+
+    const fileArray = [];
+    const progressBars = [];
+
+    for (let index = 1; index < table.rows.length; index++) {
+      const row = table.rows[index];
+
+      const offSetObj = row.cells[0].childNodes[0] as HTMLInputElement;
+      const offset = parseInt(offSetObj.value);
+
+      const fileObj = row.cells[1].childNodes[0] as ChildNode & { data: string };
+      const progressBar = row.cells[2].childNodes[0];
+
+      progressBar.textContent = "0";
+      progressBars.push(progressBar);
+
+      row.cells[2].style.display = "initial";
+      row.cells[3].style.display = "none";
+
+      fileArray.push({ data: fileObj.data, address: offset });
+    }
+
+    try {
+      const flashOptions: FlashOptions = {
+        fileArray: fileArray,
+        flashMode: "dio",
+        flashFreq: "80m",
+        eraseAll: false,
+        compress: true,
+        reportProgress: (fileIndex, written, total) => {
+          progressBars[fileIndex].value = (written / total) * 100;
+        },
+        calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
+      } as FlashOptions;
+      await esploader.writeFlash(flashOptions);
+      await esploader.after();
+    } catch (e) {
+      console.error(e);
+      term.writeln(`Error: ${e.message}`);
+    } finally {
+      // Hide progress bars and show erase buttons
+      for (let index = 1; index < table.rows.length; index++) {
+        table.rows[index].cells[2].style.display = "none";
+        table.rows[index].cells[3].style.display = "initial";
+      }
+    }
   }
+};
 
-  // Hide error message
-  alertDiv.style.display = "none";
-
-  const fileArray = [];
-  const progressBars = [];
-
-  for (let index = 1; index < table.rows.length; index++) {
-    const row = table.rows[index];
-
-    const offSetObj = row.cells[0].childNodes[0] as HTMLInputElement;
-    const offset = parseInt(offSetObj.value);
-
-    const fileObj = row.cells[1].childNodes[0] as ChildNode & { data: string };
-    const progressBar = row.cells[2].childNodes[0];
-
-    progressBar.textContent = "0";
-    progressBars.push(progressBar);
-
-    row.cells[2].style.display = "initial";
-    row.cells[3].style.display = "none";
-
-    fileArray.push({ data: fileObj.data, address: offset });
-  }
-
+/**
+ * Program ESP32 from flasher_args.json files
+ */
+async function programFromFlasherArgs(alertMsg: HTMLElement) {
   try {
+    // Load flasher_args.json
+    const response = await fetch('../../../build/flasher_args.json');
+    const flasherArgs = await response.json();
+    
+    const fileArray = [];
+    const progressBars = [];
+    
+    // Load each file from the build directory
+    for (let index = 1; index < table.rows.length; index++) {
+      const row = table.rows[index];
+      const offSetObj = row.cells[0].childNodes[0] as HTMLInputElement;
+      const offset = parseInt(offSetObj.value);
+      const filename = (row.cells[1] as any).filename;
+      
+      const progressBar = row.cells[2].childNodes[0];
+      progressBar.textContent = "0";
+      progressBars.push(progressBar);
+      
+      row.cells[2].style.display = "initial";
+      row.cells[3].textContent = "Loading...";
+      
+      try {
+        // Fetch the binary file
+        const fileResponse = await fetch(`../../../build/${filename}`);
+        if (!fileResponse.ok) {
+          throw new Error(`Failed to load ${filename}`);
+        }
+        
+        const arrayBuffer = await fileResponse.arrayBuffer();
+        
+        // Convert to binary string
+        const uint8Array = new Uint8Array(arrayBuffer);
+        let binaryString = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < uint8Array.length; i += chunkSize) {
+          const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
+          binaryString += String.fromCharCode(...chunk);
+        }
+        
+        fileArray.push({ data: binaryString, address: offset });
+        row.cells[3].textContent = "Loaded";
+        term.writeln(`Loaded ${filename} (${arrayBuffer.byteLength} bytes)`);
+        
+      } catch (e) {
+        row.cells[3].textContent = "Error";
+        throw new Error(`Failed to load ${filename}: ${e.message}`);
+      }
+    }
+    
+    // Flash all files
+    const flashMode = flasherArgs.flash_settings.flash_mode || "dio";
+    const flashFreq = flasherArgs.flash_settings.flash_freq || "80m";
+    
+    term.writeln(`Flashing with mode: ${flashMode}, freq: ${flashFreq}`);
+    
     const flashOptions: FlashOptions = {
       fileArray: fileArray,
+      flashMode: flashMode,
+      flashFreq: flashFreq,
       eraseAll: false,
       compress: true,
       reportProgress: (fileIndex, written, total) => {
@@ -442,18 +540,92 @@ programButton.onclick = async () => {
       },
       calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
     } as FlashOptions;
+    
     await esploader.writeFlash(flashOptions);
     await esploader.after();
+    
+    term.writeln("Flash completed successfully!");
+    
+    // Update status
+    for (let index = 1; index < table.rows.length; index++) {
+      table.rows[index].cells[3].textContent = "Done";
+    }
+    
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
+    alertMsg.innerHTML = "<strong>" + e.message + "</strong>";
+    alertDiv.style.display = "block";
   } finally {
-    // Hide progress bars and show erase buttons
+    // Hide progress bars
     for (let index = 1; index < table.rows.length; index++) {
       table.rows[index].cells[2].style.display = "none";
-      table.rows[index].cells[3].style.display = "initial";
     }
   }
-};
+}
 
 addFileButton.onclick(this);
+
+/**
+ * Load flasher_args.json and populate the file table
+ */
+loadFlasherArgsButton.onclick = async () => {
+  try {
+    // Clear existing rows except header
+    while (table.rows.length > 1) {
+      table.deleteRow(1);
+    }
+
+    const response = await fetch('../../../build/flasher_args.json');
+    const flasherArgs = await response.json();
+    
+    term.writeln('Loaded flasher_args.json successfully');
+    
+    // Get flash files and create rows
+    const flashFiles = flasherArgs.flash_files;
+    let rowCount = 1;
+    
+    for (const [address, filename] of Object.entries(flashFiles)) {
+      const row = table.insertRow(rowCount);
+      
+      // Column 1 - Offset
+      const cell1 = row.insertCell(0);
+      const element1 = document.createElement("input");
+      element1.type = "text";
+      element1.id = "offset" + rowCount;
+      element1.value = address;
+      element1.readOnly = true;
+      cell1.appendChild(element1);
+
+      // Column 2 - File path (display only)
+      const cell2 = row.insertCell(1);
+      const fileDisplay = document.createElement("span");
+      fileDisplay.textContent = filename as string;
+      fileDisplay.style.display = "block";
+      fileDisplay.style.padding = "5px";
+      
+      // Store filename for later use
+      (cell2 as any).filename = filename;
+      cell2.appendChild(fileDisplay);
+
+      // Column 3 - Progress
+      const cell3 = row.insertCell(2);
+      cell3.classList.add("progress-cell");
+      cell3.style.display = "none";
+      cell3.innerHTML = `<progress value="0" max="100"></progress>`;
+
+      // Column 4 - Status
+      const cell4 = row.insertCell(3);
+      cell4.classList.add("action-cell");
+      cell4.textContent = "Ready";
+      
+      rowCount++;
+    }
+    
+    term.writeln(`Loaded ${Object.keys(flashFiles).length} files from flasher_args.json`);
+    
+  } catch (e) {
+    console.error(e);
+    term.writeln(`Error loading flasher_args.json: ${e.message}`);
+  }
+};
