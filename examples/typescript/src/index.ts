@@ -475,7 +475,7 @@ programButton.onclick = async () => {
 async function programFromFlasherArgs(alertMsg: HTMLElement) {
   try {
     // Load flasher_args.json
-    const response = await fetch('../../../build/flasher_args.json');
+    const response = await fetch('/flasher_args.json');
     const flasherArgs = await response.json();
     
     const fileArray = [];
@@ -497,7 +497,7 @@ async function programFromFlasherArgs(alertMsg: HTMLElement) {
       
       try {
         // Fetch the binary file
-        const fileResponse = await fetch(`../../../build/${filename}`);
+        const fileResponse = await fetch(`/${filename}`);
         if (!fileResponse.ok) {
           throw new Error(`Failed to load ${filename}`);
         }
@@ -576,7 +576,10 @@ loadFlasherArgsButton.onclick = async () => {
       table.deleteRow(1);
     }
 
-    const response = await fetch('../../../build/flasher_args.json');
+    const response = await fetch('/flasher_args.json');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
     const flasherArgs = await response.json();
     
     term.writeln('Loaded flasher_args.json successfully');

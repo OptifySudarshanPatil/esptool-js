@@ -2,3 +2,5 @@ node/modules
 .parcel-cache
 dist
 package-lock.json
+src/build
+static
